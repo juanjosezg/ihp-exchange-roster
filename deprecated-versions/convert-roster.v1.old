@@ -1,0 +1,102 @@
+import pandas as pd
+import os
+import re
+
+
+def format_phone_number(phone_number):
+    """
+    Format the phone number to the desired format (8015812955 -> (801) 581-2955).
+    """
+    # Convert to string and remove any trailing '.0' if it's a float representation
+    phone_number = str(phone_number).split('.')[0]
+
+    # Remove all non-numeric characters
+    phone_number = re.sub(r'\D', '', phone_number)
+
+    # Check if the cleaned phone number has exactly 10 digits
+    if len(phone_number) == 10:
+        return f'({phone_number[:3]}) {phone_number[3:6]}-{phone_number[6:]}'
+
+    # Return original if not 10 digits
+    return phone_number
+
+
+# Define input and output directories
+input_directory = 'client_files/'
+output_directory = 'ready_for_import/'
+
+# Ensure the output directory exists
+os.makedirs(output_directory, exist_ok=True)
+
+# List all CSV files in the input directory
+csv_files = [f for f in os.listdir(input_directory) if f.endswith('.csv')]
+
+# Define filters for providers, hospitals, and facilities
+provider_filters = [
+    'SPECIALIST', 'PRIMARY CARE PHYSICIAN', 'ANCILLARY SERVICES PROVIDER',
+    'MID LEVEL PROVIDER FOR PCP', 'MID LEVEL PROVIDER FOR SPECIALIST'
+]
+hospital_filters = ['HOSPITAL']
+facility_filters = ['URGENT CARE', 'SKILLED NURSING FACILITY', 'LABS AND RADIOLOGY']
+
+# Define ordered column names and renaming dictionary
+column_order_and_rename = {
+    'first_name': 'firstname',
+    'last_name': 'lastname',
+    'specialty': 'specialty',
+    'clinic_name': 'hospitalname',
+    'phone': 'phone',
+    'address1': 'address',
+    'address2': 'address2',
+    'city': 'city',
+    'state': 'state',
+    'zip': 'zipcode',
+    'county': 'county',
+    'accepting': 'acceptingnewpatients'
+}
+
+# Loop through each CSV file in the input directory
+for csv_file in csv_files:
+    file_path = os.path.join(input_directory, csv_file)
+    df = pd.read_csv(file_path, dtype={0: str, 16: str}, low_memory=False)
+
+    # Combine language columns into a single column
+    df['languages'] = df[['language', 'language2', 'language3', 'language4']].fillna('').apply(
+        lambda row: ','.join(filter(None, row)), axis=1)
+
+    # Map additional fields
+    df['gender'] = df['gender']
+    df['board_certification'] = df['board_certified']
+    df['hospital_affiliation'] = df['hospital_privileges']
+    df['ipa'] = df['ipa_name_updated']
+
+    # Filter data according to each category
+    providers_data = df[df['type_of_provider'].isin(provider_filters)]
+    hospitals_data = df[df['type_of_provider'].isin(hospital_filters)]
+    facilities_data = df[df['type_of_provider'].isin(facility_filters)]
+
+    # Process and save each filtered dataset
+    for category, data in [('providers', providers_data), ('hospitals', hospitals_data),
+                           ('facilities', facilities_data)]:
+        # Rename columns
+        data = data.rename(columns=column_order_and_rename)
+
+        # Reorder columns to have lastname, firstname at the beginning
+        ordered_headers = ['lastname', 'firstname'] + [v for k, v in column_order_and_rename.items() if
+                                                       v not in ['lastname', 'firstname']]
+        ordered_headers += ['languages', 'gender', 'board_certification', 'hospital_affiliation', 'ipa']
+        data = data[ordered_headers]  # Reorder after renaming
+
+        # Apply phone number formatting with debugging
+        if 'phone' in data.columns:
+            print(f"Before formatting: {data['phone'].head(5).tolist()}")
+            data['phone'] = data['phone'].apply(format_phone_number)
+            print(f"After formatting: {data['phone'].head(5).tolist()}")
+
+        # Generate output file path with original file name appended
+        output_file_path = os.path.join(output_directory, f"{category}_{csv_file.replace('.csv', '')}.csv")
+
+        # Save to CSV
+        data.to_csv(output_file_path, index=False)
+
+        print(f"Output for {category} saved to: {output_file_path}")
